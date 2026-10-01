@@ -27,7 +27,7 @@ android {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
       storeFile = file(keystorePath)
       storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "uploade
+      keyAlias = "uploade"
       keyPassword = "android"
     }
   }
