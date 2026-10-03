@@ -10,6 +10,10 @@ object Formatters {
         return numberFormatter.format(points)
     }
 
+    fun formatScore(score: Long): String {
+        return numberFormatter.format(score)
+    }
+
     fun formatCompactPoints(points: Long): String {
         return when {
             points >= 1_000_000 -> String.format(Locale.US, "%.2fM", points / 1_000_000.0)

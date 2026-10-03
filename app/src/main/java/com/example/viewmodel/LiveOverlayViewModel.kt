@@ -14,6 +14,7 @@ import com.example.model.CommentBannerData
 import com.example.model.CountryItem
 import com.example.model.LiveEvent
 import com.example.model.LiveEventType
+import com.example.model.RoundRecord
 import com.example.service.MockLiveChatSimulator
 import com.example.service.YouTubeConnectionState
 import com.example.service.YouTubeLiveChatClient
@@ -39,6 +40,9 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
     private val _latestEvent = MutableStateFlow<LiveEvent?>(null)
     val latestEvent: StateFlow<LiveEvent?> = _latestEvent.asStateFlow()
 
+    private val _eventHistory = MutableStateFlow<List<LiveEvent>>(emptyList())
+    val eventHistory: StateFlow<List<LiveEvent>> = _eventHistory.asStateFlow()
+
     private val _coinBursts = MutableStateFlow<List<CoinBurstData>>(emptyList())
     val coinBursts: StateFlow<List<CoinBurstData>> = _coinBursts.asStateFlow()
 
@@ -50,6 +54,31 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
 
     private val _isTransparentBackground = MutableStateFlow(false)
     val isTransparentBackground: StateFlow<Boolean> = _isTransparentBackground.asStateFlow()
+
+    // Configurable Scoring & Anti-Spam
+    private val _isScoringActive = MutableStateFlow(true)
+    val isScoringActive: StateFlow<Boolean> = _isScoringActive.asStateFlow()
+
+    private val _pointsPerComment = MutableStateFlow(prefs.getLong("points_per_comment", 1L))
+    val pointsPerComment: StateFlow<Long> = _pointsPerComment.asStateFlow()
+
+    private val _superChatPointsPerDollar = MutableStateFlow(prefs.getLong("sc_points_per_dollar", 1000L))
+    val superChatPointsPerDollar: StateFlow<Long> = _superChatPointsPerDollar.asStateFlow()
+
+    private val _giftPoints = MutableStateFlow(prefs.getLong("gift_points", 50L))
+    val giftPoints: StateFlow<Long> = _giftPoints.asStateFlow()
+
+    private val _blockedViewers = MutableStateFlow(
+        prefs.getStringSet("blocked_viewers", emptySet())?.toSet() ?: emptySet()
+    )
+    val blockedViewers: StateFlow<Set<String>> = _blockedViewers.asStateFlow()
+
+    // Round System
+    private val _roundNumber = MutableStateFlow(prefs.getInt("round_number", 1))
+    val roundNumber: StateFlow<Int> = _roundNumber.asStateFlow()
+
+    private val _savedRounds = MutableStateFlow<List<RoundRecord>>(emptyList())
+    val savedRounds: StateFlow<List<RoundRecord>> = _savedRounds.asStateFlow()
 
     private val _totalRoundDuration = MutableStateFlow(300)
     val totalRoundDuration: StateFlow<Int> = _totalRoundDuration.asStateFlow()
@@ -72,6 +101,9 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
 
     private var roundTimerJob: Job? = null
     private var burstIdCounter = 0L
+
+    // Anti-spam recent timestamp tracker (username/userId -> lastMessageTime)
+    private val recentUserMessageTimes = HashMap<String, Long>()
 
     val youTubeClient = YouTubeLiveChatClient(
         scope = viewModelScope,
@@ -117,35 +149,44 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
 
-        simulator.intervalMillis = _simulationSpeed.value
-        simulator.start()
-        _isSimulationRunning.value = true
+        // Automatically connect to saved YouTube Live Stream during startup
+        val autoUrl = _savedYouTubeUrl.value
+        val autoKey = _savedYouTubeApiKey.value
+        if (autoUrl.isNotBlank() && autoKey.isNotBlank()) {
+            connectYouTube(autoUrl, autoKey)
+        }
+
+        // Automatically manage simulation when live stream connects
+        viewModelScope.launch {
+            youTubeConnectionState.collect { state ->
+                if (state is YouTubeConnectionState.Connected) {
+                    if (_isSimulationRunning.value) {
+                        _isSimulationRunning.value = false
+                        simulator.stop()
+                    }
+                }
+            }
+        }
     }
 
     private fun loadPersistedState() {
-        // Load countries from repo and check if persisted scores exist
-        val initialList = CountryRepository.allCountries.map { base ->
-            val savedScore = prefs.getLong("score_${base.id}", -1L)
-            if (savedScore != -1L) {
-                base.copy(score = savedScore)
-            } else base
+        val initialList = CountryRepository.allCountries.map { country ->
+            val persisted = prefs.getLong("country_score_${country.id}", country.score)
+            country.copy(score = persisted)
         }
-
-        _topChatters.value = CountryRepository.initialTopChatters
         reRankAndPublish(initialList)
+        _topChatters.value = CountryRepository.initialTopChatters
     }
 
     private fun persistScore(countryId: String, score: Long) {
-        prefs.edit().putLong("score_$countryId", score).apply()
+        prefs.edit().putLong("country_score_$countryId", score).apply()
     }
 
     private fun reRankAndPublish(list: List<CountryItem>) {
-        // Sort by score descending (countries with 0 points naturally appear at the bottom)
         val sorted = list.sortedWith(
             compareByDescending<CountryItem> { it.score }
                 .thenBy { it.name }
         )
-
         val ranked = sorted.mapIndexed { index, item ->
             item.copy(
                 previousRank = item.rank,
@@ -156,18 +197,55 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     private fun handleIncomingEvent(event: LiveEvent) {
-        _latestEvent.value = event
+        // Anti-Spam Check 1: Scoring active
+        if (!_isScoringActive.value) return
+
+        // Anti-Spam Check 2: Blocked Viewer Check
+        val isBlocked = _blockedViewers.value.any { blocked ->
+            blocked.equals(event.username, ignoreCase = true) ||
+                    (event.userId.isNotBlank() && blocked.equals(event.userId, ignoreCase = true))
+        }
+        if (isBlocked) return
+
+        // Anti-Spam Check 3: Rate Limiting (max 1 message per 350ms per user)
+        val now = System.currentTimeMillis()
+        val lastTime = recentUserMessageTimes[event.username] ?: 0L
+        if (now - lastTime < 350L) return
+        recentUserMessageTimes[event.username] = now
+
+        // Calculate points based on event type and admin configurations
+        val effectivePoints = when (event.type) {
+            LiveEventType.SUPER_CHAT -> {
+                // 1000 points per dollar!
+                val dollars = if (event.dollarAmount > 0.0) event.dollarAmount else 1.0
+                (dollars * _superChatPointsPerDollar.value).toLong().coerceAtLeast(_superChatPointsPerDollar.value)
+            }
+            LiveEventType.GIFT -> {
+                // 50 points on gift!
+                _giftPoints.value
+            }
+            LiveEventType.LIKE_SUBSCRIBE -> 400L
+            LiveEventType.COMMENT -> {
+                // Configurable points per comment (default 1 pt * level)
+                _pointsPerComment.value * event.level.coerceAtLeast(1)
+            }
+        }
+
+        val finalizedEvent = event.copy(points = effectivePoints)
+        _latestEvent.value = finalizedEvent
+
+        // Record in comment history (last 50 events)
+        _eventHistory.update { (listOf(finalizedEvent) + it).take(50) }
 
         // Update country score
         _countries.update { currentList ->
             val updated = currentList.map { country ->
-                if (country.id == event.countryId) {
-                    val newScore = country.score + event.points
+                if (country.id == finalizedEvent.countryId) {
+                    val newScore = country.score + finalizedEvent.points
                     persistScore(country.id, newScore)
                     country.copy(score = newScore)
                 } else country
             }
-            // Sort & re-rank
             val sorted = updated.sortedWith(
                 compareByDescending<CountryItem> { it.score }
                     .thenBy { it.name }
@@ -181,18 +259,19 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         // Update Top Chatter statistics
-        updateChatter(event.username, event.countryId, event.countryFlag, event.level, event.points)
+        updateChatter(finalizedEvent.username, finalizedEvent.countryId, finalizedEvent.countryFlag, finalizedEvent.level, finalizedEvent.points)
 
         // Trigger CoinBurst animation from the country flag
         spawnCoinBurst(
-            countryId = event.countryId,
-            countryFlag = event.countryFlag,
-            username = event.username,
-            points = event.points
+            countryId = finalizedEvent.countryId,
+            countryFlag = finalizedEvent.countryFlag,
+            username = finalizedEvent.username,
+            points = finalizedEvent.points,
+            isSuperChat = finalizedEvent.type == LiveEventType.SUPER_CHAT
         )
 
-        // Show live comment banner for 2 seconds
-        showCommentBanner(event)
+        // Show live comment banner for 2 seconds (with User ID on top for Super Chat & Gift)
+        showCommentBanner(finalizedEvent)
     }
 
     private fun showCommentBanner(event: LiveEvent) {
@@ -200,11 +279,15 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         val banner = CommentBannerData(
             id = ++bannerIdCounter,
             username = event.username,
+            userId = event.userId.ifBlank { "@${event.username}" },
+            userAvatarUrl = event.userAvatarUrl,
             message = event.message.ifBlank { "Boosted ${event.countryName}! +${event.points}" },
             countryFlag = event.countryFlag,
             countryName = event.countryName,
             points = event.points,
             level = event.level,
+            type = event.type,
+            dollarAmount = event.dollarAmount,
             isLikeSub = event.type == LiveEventType.LIKE_SUBSCRIBE
         )
         _activeCommentBanner.value = banner
@@ -253,8 +336,7 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    private fun spawnCoinBurst(countryId: String, countryFlag: String, username: String, points: Long) {
-        // Find index of country in 9 columns grid to calculate approximate screen coordinate
+    private fun spawnCoinBurst(countryId: String, countryFlag: String, username: String, points: Long, isSuperChat: Boolean = false) {
         val index = _countries.value.indexOfFirst { it.id == countryId }.coerceAtLeast(0)
         val col = index % 9
         val row = index / 9
@@ -270,18 +352,18 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
             username = username,
             xPercent = xPercent,
             yPercent = yPercent,
-            coinCount = if (points >= 400) 12 else 6
+            coinCount = if (isSuperChat) 24 else if (points >= 400) 14 else 6
         )
 
-        _coinBursts.update { (it + burst).takeLast(10) }
+        _coinBursts.update { (it + burst).takeLast(12) }
 
-        // Remove after animation time
         viewModelScope.launch {
             delay(1200)
             _coinBursts.update { current -> current.filter { it.id != burst.id } }
         }
     }
 
+    // Trigger Actions
     fun triggerCommentAction() {
         val target = _countries.value.firstOrNull() ?: return
         viewModelScope.launch {
@@ -289,7 +371,7 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
                 type = LiveEventType.COMMENT,
                 countryId = target.id,
                 username = "You",
-                level = 5 // +5 points
+                level = 5
             )
         }
     }
@@ -302,6 +384,29 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
                 countryId = target.id,
                 username = "You",
                 level = 1
+            )
+        }
+    }
+
+    fun triggerSuperChatAction(dollarAmount: Double = 5.0) {
+        val target = _countries.value.firstOrNull() ?: return
+        viewModelScope.launch {
+            simulator.triggerManualSuperChat(
+                countryId = target.id,
+                username = "TopSupporter",
+                dollarAmount = dollarAmount,
+                message = "Super Chat $$dollarAmount for ${target.name}! 🔥"
+            )
+        }
+    }
+
+    fun triggerGiftAction() {
+        val target = _countries.value.firstOrNull() ?: return
+        viewModelScope.launch {
+            simulator.triggerManualGift(
+                countryId = target.id,
+                username = "GiftSender",
+                message = "Sent a Gift for ${target.name}! 🎁"
             )
         }
     }
@@ -338,6 +443,74 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         _isTransparentBackground.value = isTransparent
     }
 
+    // Admin & Scoring Controls
+    fun toggleScoring(active: Boolean) {
+        _isScoringActive.value = active
+    }
+
+    fun setPointsPerComment(points: Long) {
+        _pointsPerComment.value = points
+        prefs.edit().putLong("points_per_comment", points).apply()
+    }
+
+    fun setSuperChatPointsPerDollar(multiplier: Long) {
+        _superChatPointsPerDollar.value = multiplier
+        prefs.edit().putLong("sc_points_per_dollar", multiplier).apply()
+    }
+
+    fun setGiftPoints(points: Long) {
+        _giftPoints.value = points
+        prefs.edit().putLong("gift_points", points).apply()
+    }
+
+    fun manuallyAdjustScore(countryId: String, delta: Long) {
+        _countries.update { currentList ->
+            val updated = currentList.map { country ->
+                if (country.id == countryId) {
+                    val newScore = maxOf(0L, country.score + delta)
+                    persistScore(country.id, newScore)
+                    country.copy(score = newScore)
+                } else country
+            }
+            val sorted = updated.sortedWith(
+                compareByDescending<CountryItem> { it.score }
+                    .thenBy { it.name }
+            )
+            sorted.mapIndexed { index, country ->
+                country.copy(
+                    previousRank = country.rank,
+                    rank = index + 1
+                )
+            }
+        }
+    }
+
+    fun changeViewerCountry(username: String, newCountryId: String) {
+        val targetCountry = _countries.value.find { it.id == newCountryId } ?: return
+        _topChatters.update { list ->
+            list.map {
+                if (it.username.equals(username, ignoreCase = true)) {
+                    it.copy(countryId = targetCountry.id, countryFlag = targetCountry.flag)
+                } else it
+            }
+        }
+    }
+
+    fun blockViewer(identifier: String) {
+        val trimmed = identifier.trim()
+        if (trimmed.isBlank()) return
+        val updated = _blockedViewers.value + trimmed
+        _blockedViewers.value = updated
+        prefs.edit().putStringSet("blocked_viewers", updated).apply()
+    }
+
+    fun unblockViewer(identifier: String) {
+        val updated = _blockedViewers.value - identifier
+        _blockedViewers.value = updated
+        prefs.edit().putStringSet("blocked_viewers", updated).apply()
+    }
+
+    // Round System
     fun setRoundTimerMinutes(minutes: Int?) {
         if (minutes == null) {
             roundTimerJob?.cancel()
@@ -378,6 +551,7 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
             if (_roundTimeRemaining.value <= 0) {
                 _isRoundFinished.value = true
                 _isTimerRunning.value = false
+                saveCurrentRoundResult()
             }
         }
     }
@@ -389,6 +563,25 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
         if (!_isTimerRunning.value) {
             toggleTimerPause()
         }
+    }
+
+    fun startNewRound() {
+        saveCurrentRoundResult()
+        _roundNumber.update { it + 1 }
+        prefs.edit().putInt("round_number", _roundNumber.value).apply()
+        resetAllScores()
+        startCountdownTimer(300)
+    }
+
+    private fun saveCurrentRoundResult() {
+        val winner = _countries.value.firstOrNull() ?: return
+        val record = RoundRecord(
+            roundNumber = _roundNumber.value,
+            winnerName = winner.name,
+            winnerFlag = winner.flag,
+            winningScore = winner.score
+        )
+        _savedRounds.update { (listOf(record) + it).take(20) }
     }
 
     fun signInAndConnectYouTube(
@@ -406,7 +599,6 @@ class LiveOverlayViewModel(application: Application) : AndroidViewModel(applicat
                     if (streamResult.isSuccess) {
                         connectYouTube(videoId, effectiveKey)
                     } else {
-                        // Still connect with video ID
                         connectYouTube(videoId, effectiveKey)
                     }
                 } else if (_savedYouTubeUrl.value.isNotBlank()) {

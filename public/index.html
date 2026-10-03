@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube Live Chat Boss Fight - Stream Overlay</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,400;0,700;1,700&family=Press+Start+2P&family=Rajdhani:wght@600;700;800&display=swap" rel="stylesheet">
+</head>
+<body class="theme-default">
+
+  <!-- Stream & Control Bar (Hides in OBS mode with ?obs=true) -->
+  <header id="controlBar" class="control-bar">
+    <div class="brand">
+      <span class="live-dot"></span>
+      <span class="brand-title">YT LIVE CHAT BOSS FIGHT</span>
+    </div>
+
+    <!-- Live Connection Status Pill -->
+    <div class="status-pill" id="statusPill" title="Click to connect YouTube stream">
+      <span class="status-icon" id="statusIcon">⚡</span>
+      <span class="status-text" id="statusText">TEST MODE ACTIVE</span>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="controls-group">
+      <button id="btnToggleTestMode" class="btn btn-warning" title="Toggle automatic fake chat simulation">
+        <span class="icon">🤖</span> Test Mode: <strong id="testModeStateText">ON</strong>
+      </button>
+
+      <div class="quick-commands">
+        <span class="qc-label">Quick Test:</span>
+        <button class="btn btn-sm btn-action" onclick="sendQuickCommand('!attack')">⚔️ !attack</button>
+        <button class="btn btn-sm btn-action" onclick="sendQuickCommand('!jump')">⬆️ !jump</button>
+        <button class="btn btn-sm btn-action" onclick="sendQuickCommand('!left')">⬅️ !left</button>
+        <button class="btn btn-sm btn-action" onclick="sendQuickCommand('!right')">➡️ !right</button>
+      </div>
+
+      <button id="btnToggleTransparent" class="btn btn-secondary" title="Make background transparent for OBS overlay">
+        <span class="icon">🏁</span> Transparent BG
+      </button>
+
+      <button id="btnOpenConnectModal" class="btn btn-primary" title="Connect your real YouTube live stream">
+        <span class="icon">🔴</span> Link YouTube Live
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Game Container -->
+  <main class="game-wrapper" id="gameWrapper">
+    <!-- Canvas Overlay for 60fps Game Animation -->
+    <canvas id="gameCanvas"></canvas>
+
+    <!-- Top HUD: Boss Health Bar & Level -->
+    <div class="top-hud">
+      <div class="boss-hud-card">
+        <div class="boss-header">
+          <div class="boss-title-wrap">
+            <span class="boss-skull">💀</span>
+            <span class="boss-name" id="bossName">INFERNO GOLEM</span>
+            <span class="boss-level-tag" id="bossLevelTag">LVL 1</span>
+          </div>
+          <div class="boss-hp-numbers">
+            <span id="bossCurrentHp">1000</span> / <span id="bossMaxHp">1000</span> HP
+          </div>
+        </div>
+
+        <div class="hp-bar-track">
+          <div class="hp-bar-damage-lag" id="hpBarLag"></div>
+          <div class="hp-bar-fill" id="hpBarFill"></div>
+          <div class="hp-bar-glow"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Side HUD: Leaderboard & Recent Command Feed -->
+    <aside class="sidebar-hud">
+      <!-- Leaderboard: Top 5 Viewers by Damage -->
+      <div class="hud-panel leaderboard-panel">
+        <div class="panel-header">
+          <span class="panel-title">🏆 TOP 5 VIEWERS</span>
+          <span class="panel-badge">DAMAGE</span>
+        </div>
+        <ul class="leaderboard-list" id="leaderboardList">
+          <li class="empty-state">Viewers type commands to join!</li>
+        </ul>
+      </div>
+
+      <!-- Live Chat Command Feed (Latest 5 Commands) -->
+      <div class="hud-panel feed-panel">
+        <div class="panel-header">
+          <span class="panel-title">💬 CHAT COMMANDS</span>
+          <span class="panel-badge">LIVE</span>
+        </div>
+        <ul class="command-feed-list" id="commandFeedList">
+          <li class="feed-item hint">Type !left, !right, !jump, !attack</li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- Center Screen Announcement Overlay (Level Up, Victory, Respawn) -->
+    <div class="announcement-overlay" id="announcementOverlay">
+      <div class="announcement-content">
+        <div class="announcement-badge" id="announceBadge">BOSS SLAIN!</div>
+        <h1 class="announcement-title" id="announceTitle">LEVEL UP!</h1>
+        <p class="announcement-sub" id="announceSub">Boss is respawning stronger...</p>
+      </div>
+    </div>
+
+    <!-- Onscreen Commands Helper Box (Bottom Left) -->
+    <div class="commands-help-box" id="commandsHelpBox">
+      <div class="help-title">TYPE IN CHAT TO PLAY:</div>
+      <div class="help-chips">
+        <span class="chip"><code>!attack</code> ⚔️</span>
+        <span class="chip"><code>!jump</code> 🦘</span>
+        <span class="chip"><code>!left</code> ⬅️</span>
+        <span class="chip"><code>!right</code> ➡️</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- YouTube Live Connect Modal -->
+  <div class="modal-backdrop" id="connectModal">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <span class="modal-icon">🔴</span>
+          <h3>Connect YouTube Live Stream</h3>
+        </div>
+        <button class="modal-close-btn" id="btnCloseConnectModal">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p class="modal-desc">
+          Enter your YouTube Live Stream URL or Video ID. The game will automatically track your live chat in real time, respect API quotas, and process commands instantly!
+        </p>
+
+        <div class="form-group">
+          <label for="inputStreamUrl">YouTube Live Stream URL or Video ID:</label>
+          <input type="text" id="inputStreamUrl" placeholder="https://www.youtube.com/watch?v=... or Video ID">
+          <span class="help-text">Example: <code>https://youtube.com/live/abc123xyz</code> or <code>abc123xyz</code></span>
+        </div>
+
+        <div class="form-group">
+          <label for="inputApiKey">YouTube Data API v3 Key:</label>
+          <input type="password" id="inputApiKey" placeholder="AIzaSy...">
+          <span class="help-text">Obtain from Google Cloud Console (YouTube Data API v3). Can also be stored in <code>.env</code> file.</span>
+        </div>
+
+        <div class="modal-status-box" id="modalStatusBox">
+          Status: Ready to connect
+        </div>
+
+        <div class="obs-instructions-box">
+          <strong>OBS Browser Source Setup:</strong>
+          <p>Add a <em>Browser Source</em> in OBS with URL: <code id="obsUrlCopy">http://localhost:3000/?obs=true&transparent=true</code></p>
+          <p>Width: <code>1920</code> | Height: <code>1080</code></p>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnDisconnectStream" style="display:none;">Disconnect</button>
+        <button class="btn btn-primary" id="btnConnectStream">Start Reading Live Chat</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

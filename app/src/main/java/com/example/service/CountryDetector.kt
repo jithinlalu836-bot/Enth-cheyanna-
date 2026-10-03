@@ -1,6 +1,5 @@
 package com.example.service
 
-import com.example.data.CountryRepository
 import com.example.model.CountryItem
 import java.util.Locale
 
@@ -144,6 +143,26 @@ object CountryDetector {
         }
 
         return null
+    }
+
+    fun detectCountryWithAuthor(
+        commentText: String,
+        authorName: String,
+        allCountries: List<CountryItem>
+    ): CountryItem? {
+        return detectCountry(commentText, allCountries) ?: detectCountry(authorName, allCountries)
+    }
+
+    /**
+     * Checks if the comment is a generic cheer like "+1", "boost", "let's go"
+     */
+    fun isGenericCheer(commentText: String): Boolean {
+        val lower = commentText.lowercase(Locale.ROOT).trim()
+        val cheerWords = listOf(
+            "+1", "1", "boost", "let's go", "lets go", "go", "win", "push", "score", "top",
+            "vote", "champion", "king", "queen", "support", "power", "up"
+        )
+        return cheerWords.any { lower.contains(it) }
     }
 
     /**

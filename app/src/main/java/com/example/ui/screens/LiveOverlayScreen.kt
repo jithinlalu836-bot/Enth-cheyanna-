@@ -86,6 +86,15 @@ fun LiveOverlayScreen(
     val googleAuthState by viewModel.googleAuthState.collectAsState()
     val activeCommentBanner by viewModel.activeCommentBanner.collectAsState()
 
+    // Configurable scoring & Admin states
+    val isScoringActive by viewModel.isScoringActive.collectAsState()
+    val pointsPerComment by viewModel.pointsPerComment.collectAsState()
+    val superChatPointsPerDollar by viewModel.superChatPointsPerDollar.collectAsState()
+    val giftPoints by viewModel.giftPoints.collectAsState()
+    val roundNumber by viewModel.roundNumber.collectAsState()
+    val blockedViewers by viewModel.blockedViewers.collectAsState()
+    val eventHistory by viewModel.eventHistory.collectAsState()
+
     val context = LocalContext.current
     val activity = context as? Activity
     val haptic = LocalHapticFeedback.current
@@ -125,7 +134,7 @@ fun LiveOverlayScreen(
                 .padding(vertical = 2.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // 1. Header: "✦ BOOST YOUR COUNTRY ✦" in bold white with a soft glow
+            // 1. Header: "✦ BOOST YOUR COUNTRY ✦"
             Header(
                 isSimulationRunning = isSimulationRunning,
                 onToggleSimulation = {
@@ -161,9 +170,7 @@ fun LiveOverlayScreen(
                 }
             )
 
-            // 2. Two action cards side by side
-            // - "Comment +1 / Lv 5 +5 Point" (green glowing border, chat bubble icon)
-            // - "Like & Subscribe +400 Points" (dark card, yellow bell icon)
+            // 2. Action cards
             ActionCards(
                 onCommentClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -175,16 +182,13 @@ fun LiveOverlayScreen(
                 }
             )
 
-            // 3. Latest-activity bar: "Level 1 @username Country +1", with a pink line above and a cyan line below
+            // 3. Latest-activity bar: "Level 1 @username Country +1"
             ActivityBar(latestEvent = latestEvent)
 
-            // 4. "Top Chatter" panel (gold border, dark background): "Top 5" label at top right and a horizontally scrollable row of cards
+            // 4. "Top Chatter" panel (gold border, dark background): "Top 5"
             TopChatters(chatters = topChatters)
 
-            // 5. Country leaderboard grid: 9 columns of flag tiles with the score under each flag
-            // - Sorted by score, highest first
-            // - Top 3 get crown, silver, bronze medal, #1 flag has yellow highlight border
-            // - Countries with 0 points dimmed at the bottom
+            // 5. Country leaderboard grid & Top 3 Podium
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -201,7 +205,7 @@ fun LiveOverlayScreen(
             }
         }
 
-        // 6. A small floating settings gear on the right edge
+        // 6. Floating settings gear on the right edge
         Surface(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
@@ -230,12 +234,32 @@ fun LiveOverlayScreen(
             }
         }
 
-        // Floating Gold Coins Burst & Popups animation overlay
+        // Floating Gold Coins Burst animation overlay
         CoinBurst(bursts = coinBursts)
+
+        // 2-Second Live Comment, Super Chat & Gift Banner Overlay
+        CommentBanner(
+            banner = activeCommentBanner,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .padding(top = 92.dp)
+        )
 
         // Admin Panel & OBS Settings Dialog
         if (showAdminDialog) {
             AdminPanelDialog(
+                isScoringActive = isScoringActive,
+                onToggleScoring = { viewModel.toggleScoring(it) },
+                pointsPerComment = pointsPerComment,
+                onChangePointsPerComment = { viewModel.setPointsPerComment(it) },
+                superChatPointsPerDollar = superChatPointsPerDollar,
+                onChangeSuperChatPoints = { viewModel.setSuperChatPointsPerDollar(it) },
+                giftPoints = giftPoints,
+                onChangeGiftPoints = { viewModel.setGiftPoints(it) },
+                roundNumber = roundNumber,
+                onStartNewRound = { viewModel.startNewRound() },
+                onAddExtraTime = { viewModel.addExtraTime(60) },
                 isSimulationRunning = isSimulationRunning,
                 onToggleSimulation = { viewModel.toggleSimulation() },
                 simulationSpeed = simulationSpeed,
@@ -244,9 +268,21 @@ fun LiveOverlayScreen(
                 onToggleTransparentBackground = { viewModel.toggleTransparentBackground(it) },
                 roundTimerSeconds = roundTimerSeconds,
                 onSetRoundTimerMinutes = { viewModel.setRoundTimerMinutes(it) },
+                countries = countries,
+                onManualAdjustScore = { id, delta -> viewModel.manuallyAdjustScore(id, delta) },
+                blockedViewers = blockedViewers,
+                onBlockViewer = { viewModel.blockViewer(it) },
+                onUnblockViewer = { viewModel.unblockViewer(it) },
+                eventHistory = eventHistory,
                 onResetScores = { viewModel.resetAllScores() },
                 onTriggerTestComment = { viewModel.triggerCommentAction() },
                 onTriggerTestLikeSub = { viewModel.triggerLikeSubscribeAction() },
+                onTriggerTestSuperChat = { viewModel.triggerSuperChatAction(5.0) },
+                onTriggerTestGift = { viewModel.triggerGiftAction() },
+                onOpenYouTubeConnect = {
+                    showAdminDialog = false
+                    showYouTubeDialog = true
+                },
                 onDismiss = { showAdminDialog = false }
             )
         }

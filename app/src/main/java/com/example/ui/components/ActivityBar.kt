@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.LiveEvent
 import com.example.model.LiveEventType
+import com.example.ui.theme.FlameOrange
 import com.example.ui.theme.GoldCrown
 import com.example.ui.theme.NeonCyan
 import com.example.ui.theme.NeonGreen
@@ -81,17 +81,27 @@ fun ActivityBar(
                         horizontalArrangement = Arrangement.Center,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        // Level badge
+                        // Badge
+                        val badgeColor = when (event.type) {
+                            LiveEventType.SUPER_CHAT -> GoldCrown
+                            LiveEventType.GIFT -> NeonMagenta
+                            LiveEventType.LIKE_SUBSCRIBE -> FlameOrange
+                            LiveEventType.COMMENT -> NeonCyan
+                        }
+                        val badgeText = when (event.type) {
+                            LiveEventType.SUPER_CHAT -> "SUPER CHAT"
+                            LiveEventType.GIFT -> "GIFT"
+                            LiveEventType.LIKE_SUBSCRIBE -> "VIP"
+                            LiveEventType.COMMENT -> "Lv ${event.level}"
+                        }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(3.dp))
-                                .background(
-                                    if (event.type == LiveEventType.LIKE_SUBSCRIBE) GoldCrown else NeonMagenta
-                                )
+                                .background(badgeColor)
                                 .padding(horizontal = 4.dp, vertical = 0.5.dp)
                         ) {
                             Text(
-                                text = if (event.type == LiveEventType.LIKE_SUBSCRIBE) "VIP" else "Level ${event.level}",
+                                text = badgeText,
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Black,
                                 color = Color.Black
@@ -100,12 +110,17 @@ fun ActivityBar(
 
                         Spacer(modifier = Modifier.width(5.dp))
 
-                        // Username
+                        // Username / ID
+                        val displayName = if (event.type == LiveEventType.SUPER_CHAT || event.type == LiveEventType.GIFT) {
+                            event.userId.ifBlank { "@${event.username}" }
+                        } else {
+                            "@${event.username}"
+                        }
                         Text(
-                            text = "@${event.username}",
+                            text = displayName,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
-                            color = NeonCyan,
+                            color = if (event.type == LiveEventType.SUPER_CHAT) GoldCrown else NeonCyan,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -125,11 +140,17 @@ fun ActivityBar(
                         Spacer(modifier = Modifier.width(5.dp))
 
                         // Points earned
+                        val pointsColor = when (event.type) {
+                            LiveEventType.SUPER_CHAT -> GoldCrown
+                            LiveEventType.GIFT -> NeonMagenta
+                            LiveEventType.LIKE_SUBSCRIBE -> GoldCrown
+                            LiveEventType.COMMENT -> NeonGreen
+                        }
                         Text(
                             text = "+${event.points}",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Black,
-                            color = if (event.type == LiveEventType.LIKE_SUBSCRIBE) GoldCrown else NeonGreen
+                            color = pointsColor
                         )
                     }
                 }
